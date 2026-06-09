@@ -34,3 +34,6 @@ build/
 
 ### frontend ###
 nginx-1.18.0/
+
+### Claude code ###
+CLAUDE.md

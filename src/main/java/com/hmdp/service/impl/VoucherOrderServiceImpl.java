@@ -9,7 +9,10 @@ import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.UserHolder;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +36,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     private RedisIdWorker redisIdWorker;
 
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private RedissonClient redissonClient;
+
     @Override
     public Result seckillVoucher(Long voucherId) {
 
@@ -52,13 +61,36 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         Long userId = UserHolder.getUser().getId();
         // 给<单用户id>以及<事务管理>同时加本地锁，集群模式锁不住
         // intern保证对象一致，来自字符串常量池
-        synchronized (userId.toString().intern()) {
-            // 使用代理对象，保证事务不失效
-            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+        //synchronized (userId.toString().intern()) {
+        //    // 使用代理对象，保证事务不失效
+        //    IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+        //
+        //    return proxy.createVoucherOrder(voucherId);
+        //
+        //}
 
-            return proxy.createVoucherOrder(voucherId);
+        // 使用自定义Redis分布式锁
+        //SimpleRedisLock lock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
+        //boolean isLock = lock.tryLock(1200L);
 
+        // 使用Redisson分布式锁
+        RLock lock = redissonClient.getLock("lock:order:" + userId);
+        boolean isLock = lock.tryLock();
+
+        if (!isLock) {
+            return Result.fail("不允许重复下单");
         }
+
+        try {
+            //使用代理对象，保证事务不失效
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        } catch (IllegalStateException e) {
+            throw new RuntimeException(e);
+        } finally {
+            lock.unlock();
+        }
+
     }
 
     @Transactional
